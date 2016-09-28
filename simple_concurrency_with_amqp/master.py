@@ -93,7 +93,7 @@ class Master(object):
 
     def spawn_worker(self):
         self.age += 1
-        worker_object = Worker(self.age, os.getpid())
+        worker_object = Worker(self.age, os.getpid(), self.settings_config.task_module)
         pid = os.fork()
         if pid != 0:
             self.workers[pid] = worker_object

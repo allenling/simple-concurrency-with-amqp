@@ -37,6 +37,9 @@ class SettingsField(object):
     def reload(self):
         raise NotImplemented
 
+    def load(self):
+        raise NotImplemented
+
     def copy(self):
         return copy.copy(self)
 
@@ -65,6 +68,9 @@ class WorkerTimeout(SettingsField):
     arg = '--worker-timeout'
     help = 'worker timeout'
 
+    def load(self):
+        pass
+
     def reload(self):
         pass
 
@@ -73,9 +79,12 @@ class WorkerTimeout(SettingsField):
 class TaskModuleString(SettingsField):
     required = True
     value = None
-    name = 'task'
-    arg = '--task'
+    name = 'task_module_str'
+    arg = '--task-module-str'
     help = 'path.to.your.task.module'
+
+    def load(self):
+        pass
 
     def reload(self):
         reload_settings_module(self)
@@ -90,6 +99,9 @@ class Workers(SettingsField):
     arg = '--workers'
     help = 'worker number'
 
+    def load(self):
+        pass
+
     def reload(self):
         pass
 
@@ -101,6 +113,9 @@ class Settings(SettingsField):
     arg = '--settings'
     help = 'your.settings.path'
 
+    def load(self):
+        pass
+
     def reload(self):
         reload_settings_module(self)
 
@@ -108,6 +123,7 @@ class Settings(SettingsField):
 class SettingsConfig(object):
 
     def __init__(self, args=None, user_settings_string=None):
+        self.settings = {}
         self.args = args
         self.user_settings_string = user_settings_string
         self.compact_settings()
@@ -115,12 +131,20 @@ class SettingsConfig(object):
     def __getattr__(self, key):
         return self.settings[key].value
 
+    @property
+    def task_module(self):
+        task_module_str = self.settings['task_module_str'].value
+        if task_module_str in sys.modules:
+            return sys.modules[task_module_str]
+        return importlib.import_module(task_module_str)
+
     def compact_settings(self):
-        self.settings = {}
         if self.user_settings_string:
             if self.user_settings_string in sys.modules:
-                del sys.modules[self.user_settings_string]
-            self.user_settings = importlib.import_module(self.user_settings_string)
+                reload(sys.modules[self.user_settings_string])
+                self.user_settings = sys.modules[self.user_settings_string]
+            else:
+                self.user_settings = importlib.import_module(self.user_settings_string)
         else:
             self.user_settings = self.args
         for st in BaseSettings.settings:

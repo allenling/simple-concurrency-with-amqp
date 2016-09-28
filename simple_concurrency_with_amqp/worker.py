@@ -1,6 +1,7 @@
 # coding=utf-8
 from __future__ import unicode_literals
 from __future__ import absolute_import
+import sys
 import os
 import signal
 import time
@@ -16,6 +17,11 @@ class Worker(object):
 
     def init_signals(self):
         signal.signal(signal.SIGTERM, self.sigterm)
+        signal.signal(signal.SIGQUIT, self.sigquit)
+
+    def sigquit(self, signum, frame):
+        print 'worker quit'
+        sys.exit(0)
 
     def sigterm(self, signum, frame):
         '''

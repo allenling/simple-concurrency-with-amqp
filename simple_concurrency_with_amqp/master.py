@@ -67,6 +67,7 @@ class Master(object):
         '''
         check if this is any worker doing something too long and kill it
         '''
+        # TODO: check is there any timeout worker
         pass
 
     def init_signals(self):
@@ -129,7 +130,6 @@ class Master(object):
         while self.workers and _count < 10:
             _count += 1
             time.sleep(1)
-        print self.workers
         self.kill_all_workers(gracefully=False)
         print 'master exit'
         sys.exit(0)

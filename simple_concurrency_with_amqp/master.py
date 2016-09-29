@@ -7,12 +7,16 @@ import time
 import signal
 import errno
 import sys
+import select
+
 from .worker import Worker
+from .thread_pika import ThreadingPika
 
 
 class Master(object):
 
     def __init__(self, settings_config):
+        self.epoll = select.epoll()
         self.settings_config = settings_config
         self.SIGNALS = {}
         for i in "HUP QUIT INT TERM TTIN TTOU".split():
@@ -21,10 +25,13 @@ class Master(object):
         self.signals = deque([])
         self.workers = {}
         self.age = 0
+        self.old_amqp = self.settings_config.amqp
 
     def start(self):
-        # initial resources, like create a connection vers
-        pass
+        # in master, we pull msg from amqp, ack msg and process signal
+        # establish amqp connection with pika
+        self.threading_pika = ThreadingPika(self.settings_config.amqp)
+        # TODO: setup pipe between amqp thread and master, pipe between master and worker
 
     def run(self):
         # run will loop to monitor workers
@@ -33,6 +40,8 @@ class Master(object):
         self.init_signals()
         try:
             self.manage_workers()
+            # start consume
+            self.threading_pika.start()
             while True:
                 # simply sleep, no select on pip
                 # processing signal delay, that is acceptable for a simple model
@@ -67,7 +76,7 @@ class Master(object):
         '''
         check if this is any worker doing something too long and kill it
         '''
-        # TODO: check is there any timeout worker
+        # TODO: check is there any timeout worker, temp file way like gunicorn
         pass
 
     def init_signals(self):
@@ -153,17 +162,22 @@ class Master(object):
                 return
             raise
 
-    def sigint(self):
-        print 'master int'
-        self.stop(gracefully=True)
-
     def reload(self):
         self.settings_config.reload()
+        # may re-establish amqp connection
+        if self.old_amqp != self.settings_config.amqp:
+            self.threading_pika.amqp = self.settings_config.amqp
+            self.old_amqp = self.settings_config.amqp
+            self.threading_pika.stop()
         # spawn new workers
         for _ in range(self.settings_config.workers):
             self.spawn_worker()
         # kill old workers
         self.manage_workers()
+
+    def sigint(self):
+        print 'master int'
+        self.stop(gracefully=True)
 
     def sighup(self):
         self.reload()

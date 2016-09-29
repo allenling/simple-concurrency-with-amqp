@@ -107,6 +107,22 @@ class Workers(SettingsField):
 
 
 @BaseSettings.register
+class AMQPURL(SettingsField):
+    required = True
+    type = int
+    name = 'amqp'
+    value = 1
+    arg = '--amqp'
+    help = 'amqp url'
+
+    def load(self):
+        pass
+
+    def reload(self):
+        pass
+
+
+@BaseSettings.register
 class Settings(SettingsField):
     required = False
     name = 'settings'

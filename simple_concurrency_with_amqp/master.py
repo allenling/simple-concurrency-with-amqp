@@ -18,7 +18,6 @@ from simple_concurrency_with_amqp.threading_pika import ThreadingPika
 class Master(object):
 
     def __init__(self, settings_config):
-        self.epoll = select.epoll()
         self.settings_config = settings_config
         self.SIGNALS = {}
         for i in "HUP QUIT INT TERM TTIN TTOU".split():
@@ -28,36 +27,42 @@ class Master(object):
         self.workers = {}
         self.age = 0
         self.old_amqp = self.settings_config.amqp
-        self.amqp_pipe = None
+        self.pipe = None
 
     def close_pipe(self):
-        if self.amqp_pipe:
-            [os.close(_) for _ in self.amqp_pipe]
+        if self.pipe:
+            [os.close(_) for _ in self.pipe]
 
-    def setup_amqp_pipe(self):
+    def setup_pipe(self):
         self.close_pipe()
-        self.amqp_pipe = os.pipe()
-        [fcntl.fcntl(_, fcntl.F_SETFL, os.O_NONBLOCK) for _ in self.amqp_pipe]
+        self.pipe = os.pipe()
+        [fcntl.fcntl(_, fcntl.F_SETFL, os.O_NONBLOCK) for _ in self.pipe]
+
+    def handle_threading_pika_data(self, pika_data):
+        assert 'value' in pika_data
+        if pika_data['value'] == 'stop':
+            print 'threading_pika stop, master exit'
+            self.stop()
+        elif pika_data['value'] == 'start_consume':
+            print 'threading_pika start, we could continue'
+        elif pika_data['value'] == 'msg':
+            print 'recv amqp msg: %s' % pika_data
+            print 'we should send task to workers here'
+        else:
+            print 'recv some unexpected amqp msg data %s, exit' % pika_data
+            self.stop()
 
     def wait_for_connection(self):
         try:
             while True:
-                ready = select.select([self.amqp_pipe[0]], [], [], 1.0)
+                ready = select.select([self.pipe[0]], [], [], 1.0)
                 if not ready[0]:
                     continue
-                pika_data = json.loads(os.read(ready[0][0], 1024))
-                if pika_data['key'] == 'stop':
-                    print 'threading_pika stop, master exit'
-                    self.stop()
-                elif pika_data['key'] == 'start_consume':
-                    print 'threading_pika start, we could continue'
+                raw_data = os.read(ready[0][0], 1024)
+                pika_data = json.loads(raw_data)
+                if pika_data['value'] == 'start_consume':
                     break
-                elif pika_data == 'msg':
-                    print 'should not recv amqp msg data, exit'
-                    self.stop()
-                else:
-                    print 'recv some unexpected amqp msg data %s, exit' % pika_data
-                    self.stop()
+                self.handle_threading_pika_data(pika_data)
         except select.error as e:
             if e.args[0] not in [errno.EAGAIN, errno.EINTR]:
                 raise
@@ -73,10 +78,25 @@ class Master(object):
 
     def start(self):
         # wai till thread have been established a amqp connection
-        self.setup_amqp_pipe()
-        self.threading_pika = ThreadingPika(self.amqp_pipe[0], self.amqp_pipe[1], self.settings_config.amqp)
+        self.setup_pipe()
+        self.threading_pika = ThreadingPika(self.pipe[0], self.pipe[1], self.settings_config.amqp)
         self.threading_pika.start()
         self.wait_for_connection()
+
+    def deal_with_sig(self):
+        # process signals serially
+        sig = self.signals.popleft() if self.signals else None
+        # handle signal
+        if sig not in self.SIGNALS:
+            print 'unsupport signal %s' % sig
+            return
+        sig_name = self.SIGNALS.get(sig)
+        sig_method = getattr(self, sig_name, None)
+        if sig_method is None:
+            print 'this is no any method to handle signal %s' % sig_name
+            return
+        print 'master handle signal %s' % sig_name
+        sig_method()
 
     def run(self):
         # run will loop to monitor workers
@@ -88,32 +108,45 @@ class Master(object):
             while True:
                 # simply sleep, no select on pip
                 # processing signal delay, that is acceptable for a simple model
-                time.sleep(1)
-                # process signals serially
-                sig = self.signals.popleft() if self.signals else None
-                if sig is None:
-                    # kill timeout worker
-                    self.checkout_timeout_worker()
-                    # monitor workers
-                    self.manage_workers()
-                    continue
-                # handle signal
-                if sig not in self.SIGNALS:
-                    print 'unsupport signal %s' % sig
-                    continue
-                sig_name = self.SIGNALS.get(sig)
-                sig_method = getattr(self, sig_name, None)
-                if sig_method is None:
-                    print 'this is no any method to handle signal %s' % sig_name
-                    continue
-                print 'master handle signal %s' % sig_name
-                sig_method()
+                try:
+                    ready = select.select([self.pipe[0]], [], [], 1.0)
+                    if not ready[0]:
+                        continue
+                    data = json.loads(os.read(ready[0][0], 1024))
+                except select.error as e:
+                    if e.args[0] not in [errno.EAGAIN, errno.EINTR]:
+                        raise
+                except OSError as e:
+                    if e.errno not in [errno.EAGAIN, errno.EINTR]:
+                        raise
+                except KeyboardInterrupt:
+                    sys.exit()
+                if data['key'] == 'sig':
+                    self.deal_with_sig()
+                elif data['key'] == 'amqp':
+                    self.handle_threading_pika_data(data)
+                else:
+                    print 'recv unexpected data, exit'
+                    self.stop()
+                # kill timeout worker
+                self.checkout_timeout_worker()
+                # monitor workers
+                self.manage_workers()
+                continue
         except SystemExit:
             # print 'in %s run exit' % os.getpid()
             sys.exit(-1)
 
     def handle_signal(self, sig_number, frame):
         self.signals.append(sig_number)
+        self.wakeup_for_sig()
+
+    def wakeup_for_sig(self):
+        try:
+            os.write(self.pipe[1], json.dumps({'key': 'sig'}))
+        except IOError as e:
+            if e.errno not in [errno.EAGAIN, errno.EINTR]:
+                raise
 
     def checkout_timeout_worker(self):
         '''
@@ -185,6 +218,8 @@ class Master(object):
         self.kill_all_workers(gracefully=False)
         print 'stop threading_pika'
         self.threading_pika.stop()
+        print 'close master pipe'
+        [os.close(_) for _ in self.pipe]
         print 'master exit'
         sys.exit(0)
 

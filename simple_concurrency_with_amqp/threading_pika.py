@@ -31,7 +31,11 @@ class ThreadingPika(threading.Thread):
     def close_pipes(self):
         # close old pipe
         if self.pipe:
-            [os.close(_) for _ in self.pipe]
+            try:
+                [os.close(_) for _ in self.pipe]
+            except OSError:
+                # maybe pipe had been closed
+                pass
 
     def setup_pipes(self, r_fd, w_rd):
         self.close_pipes()
@@ -42,20 +46,22 @@ class ThreadingPika(threading.Thread):
             raise StandardError('no pipe in threading_pika')
         try:
             os.write(self.pipe[1], content)
+        except OSError as e:
+            # maybe pipe had been closed
+            pass
         except IOError as e:
             if e.errno not in [errno.EAGAIN, errno.EINTR]:
                 raise
 
     def notify_stop(self):
-        self.notify(json.dumps({'key': 'stop'}))
+        self.notify(json.dumps({'key': 'amqp', 'value': 'stop'}))
 
     def notify_start_consume(self):
         print 'threading_pika notify start_consume'
-        self.notify(json.dumps({'key': 'start_consume'}))
+        self.notify(json.dumps({'key': 'amqp', 'value': 'start_consume'}))
 
-    def notify_msg(self):
-        # self.notify(json.dumps({'key': 'msg'}))
-        pass
+    def notify_msg(self, msg):
+        self.notify(json.dumps({'key': 'amqp', 'value': 'msg', 'data': msg}))
 
     def connect(self):
         return pika.SelectConnection(pika.connection.URLParameters(self.amqp_url), self.on_connected)
@@ -112,7 +118,7 @@ class ThreadingPika(threading.Thread):
     def on_message(self, unused_channel, basic_deliver, properties, body):
         print('Received message # %s from %s: %s' %
               (basic_deliver.delivery_tag, properties.app_id, body))
-        self.notify_msg()
+        self.notify_msg(body)
 
     def on_connected(self, connection):
         self.connection = connection

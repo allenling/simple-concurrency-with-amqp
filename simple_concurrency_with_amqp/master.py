@@ -8,9 +8,11 @@ import signal
 import errno
 import sys
 import select
+import fcntl
+import json
 
-from .worker import Worker
-from .thread_pika import ThreadingPika
+from simple_concurrency_with_amqp.worker import Worker
+from simple_concurrency_with_amqp.threading_pika import ThreadingPika
 
 
 class Master(object):
@@ -26,12 +28,55 @@ class Master(object):
         self.workers = {}
         self.age = 0
         self.old_amqp = self.settings_config.amqp
+        self.amqp_pipe = None
+
+    def close_pipe(self):
+        if self.amqp_pipe:
+            [os.close(_) for _ in self.amqp_pipe]
+
+    def setup_amqp_pipe(self):
+        self.close_pipe()
+        self.amqp_pipe = os.pipe()
+        [fcntl.fcntl(_, fcntl.F_SETFL, os.O_NONBLOCK) for _ in self.amqp_pipe]
+
+    def wait_for_connection(self):
+        try:
+            while True:
+                ready = select.select([self.amqp_pipe[0]], [], [], 1.0)
+                if not ready[0]:
+                    continue
+                pika_data = json.loads(os.read(ready[0][0], 1024))
+                if pika_data['key'] == 'stop':
+                    print 'threading_pika stop, master exit'
+                    self.stop()
+                elif pika_data['key'] == 'start_consume':
+                    print 'threading_pika start, we could continue'
+                    break
+                elif pika_data == 'msg':
+                    print 'should not recv amqp msg data, exit'
+                    self.stop()
+                else:
+                    print 'recv some unexpected amqp msg data %s, exit' % pika_data
+                    self.stop()
+        except select.error as e:
+            if e.args[0] not in [errno.EAGAIN, errno.EINTR]:
+                raise
+        except OSError as e:
+            if e.errno not in [errno.EAGAIN, errno.EINTR]:
+                raise
+        except KeyboardInterrupt:
+            sys.exit()
+        except Exception, e:
+            print 'exit when wait for connection, %s' % e
+            self.threading_pika.stop()
+            sys.exit()
 
     def start(self):
-        # in master, we pull msg from amqp, ack msg and process signal
-        # establish amqp connection with pika
-        self.threading_pika = ThreadingPika(self.settings_config.amqp)
-        # TODO: setup pipe between amqp thread and master, pipe between master and worker
+        # wai till thread have been established a amqp connection
+        self.setup_amqp_pipe()
+        self.threading_pika = ThreadingPika(self.amqp_pipe[0], self.amqp_pipe[1], self.settings_config.amqp)
+        self.threading_pika.start()
+        self.wait_for_connection()
 
     def run(self):
         # run will loop to monitor workers
@@ -40,8 +85,6 @@ class Master(object):
         self.init_signals()
         try:
             self.manage_workers()
-            # start consume
-            self.threading_pika.start()
             while True:
                 # simply sleep, no select on pip
                 # processing signal delay, that is acceptable for a simple model
@@ -140,6 +183,8 @@ class Master(object):
             _count += 1
             time.sleep(1)
         self.kill_all_workers(gracefully=False)
+        print 'stop threading_pika'
+        self.threading_pika.stop()
         print 'master exit'
         sys.exit(0)
 
@@ -166,9 +211,10 @@ class Master(object):
         self.settings_config.reload()
         # may re-establish amqp connection
         if self.old_amqp != self.settings_config.amqp:
-            self.threading_pika.amqp = self.settings_config.amqp
+            print 'start a new amqp connection on %s' % self.settings_config.amqp
+            self.threading_pika.amqp.connect_to_new_amqp_url(self.settings_config.amqp)
             self.old_amqp = self.settings_config.amqp
-            self.threading_pika.stop()
+            self.wait_for_connection()
         # spawn new workers
         for _ in range(self.settings_config.workers):
             self.spawn_worker()

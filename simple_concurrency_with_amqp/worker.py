@@ -43,6 +43,7 @@ class Worker(object):
         while self.alive:
             time.sleep(3)
             print 'worker %s running' % os.getpid()
+            print self.task_module.test_var
             self.check_parent_alive()
 
 

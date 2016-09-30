@@ -51,9 +51,7 @@ class ThreadingPika(threading.Thread):
 
     def notify_start_consume(self):
         print 'threading_pika notify start_consume'
-
-        self.notify(json.dumps({'key': 'heh'}))
-#         self.notify(json.dumps({'key': 'start_consume'}))
+        self.notify(json.dumps({'key': 'start_consume'}))
 
     def notify_msg(self):
         # self.notify(json.dumps({'key': 'msg'}))

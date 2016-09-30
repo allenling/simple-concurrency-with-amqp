@@ -1,8 +1,8 @@
 simple-concurrency-with-amqp
 ============================
 
-master establish amqp(rabbitmq) connection with pika
+master establish amqp(rabbitmq) connection with pika in a thread
 
-multiprocessing for master push tasks to worker with multiprocessing(Queue)
+master send task to worker through pipe
 
 prefork worker like gunicorn

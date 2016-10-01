@@ -38,7 +38,6 @@ class ThreadingPika(threading.Thread):
                 pass
 
     def setup_pipes(self, r_fd, w_rd):
-        self.close_pipes()
         self.pipe = [r_fd, w_rd]
 
     def notify(self, content):
@@ -81,7 +80,7 @@ class ThreadingPika(threading.Thread):
             self.stop()
         finally:
             self.notify_stop()
-            self.close_pipes()
+            # self.close_pipes()
 
     def stop_consuming(self):
         if getattr(self, 'channel', None):

@@ -59,8 +59,8 @@ class ThreadingPika(threading.Thread):
         print 'threading_pika notify start_consume'
         self.notify(json.dumps({'key': 'amqp', 'value': 'start_consume'}))
 
-    def notify_msg(self, msg):
-        self.notify(json.dumps({'key': 'amqp', 'value': 'msg', 'data': msg}))
+    def notify_msg(self, msg, delivery_tag):
+        self.notify(json.dumps({'key': 'amqp', 'value': 'msg', 'data': msg, 'delivery_tag': delivery_tag}))
 
     def connect(self):
         return pika.SelectConnection(pika.connection.URLParameters(self.amqp_url), self.on_connected)
@@ -117,7 +117,7 @@ class ThreadingPika(threading.Thread):
     def on_message(self, unused_channel, basic_deliver, properties, body):
         print('Received message # %s from %s: %s' %
               (basic_deliver.delivery_tag, properties.app_id, body))
-        self.notify_msg(body)
+        self.notify_msg(body, basic_deliver.delivery_tag)
 
     def on_connected(self, connection):
         self.connection = connection

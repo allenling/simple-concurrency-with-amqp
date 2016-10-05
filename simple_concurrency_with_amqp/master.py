@@ -10,6 +10,7 @@ import sys
 import select
 import fcntl
 import json
+import traceback
 
 from simple_concurrency_with_amqp.worker import Worker
 from simple_concurrency_with_amqp.threading_pika import ThreadingPika
@@ -28,6 +29,9 @@ class Master(object):
         self.age = 0
         self.old_amqp = self.settings_config.amqp
         self.pipe = None
+        self.send_task_pipes = {}
+        self.task_done_pipes = {}
+        self.idle_workers = []
 
     def close_pipe(self):
         if self.pipe:
@@ -38,6 +42,12 @@ class Master(object):
         self.pipe = os.pipe()
         [fcntl.fcntl(_, fcntl.F_SETFL, os.O_NONBLOCK) for _ in self.pipe]
 
+    def send_task(self, pika_data):
+        assert self.idle_workers
+        idle_worker = self.idle_workers.pop(0)
+        print 'send task to %s' % idle_worker
+        os.write(self.send_task_pipes[idle_worker][1], json.dumps(pika_data))
+
     def handle_threading_pika_data(self, pika_data):
         assert 'value' in pika_data
         if pika_data['value'] == 'stop':
@@ -46,8 +56,8 @@ class Master(object):
         elif pika_data['value'] == 'start_consume':
             print 'threading_pika start, we could continue'
         elif pika_data['value'] == 'msg':
-            print 'recv amqp msg: %s' % pika_data
-            print 'we should send task to workers here'
+            print 'master recv amqp msg: %s' % pika_data
+            self.send_task(pika_data)
         else:
             print 'recv some unexpected amqp msg data %s, exit' % pika_data
             self.stop()
@@ -98,6 +108,13 @@ class Master(object):
         print 'master handle signal %s' % sig_name
         sig_method()
 
+    def ack_task_done(self, data):
+        print 'ack data: %s' % data
+        print 'idle workers: %s' % self.idle_workers
+        assert data['pid'] not in self.idle_workers
+        self.idle_workers.append(data['pid'])
+        self.threading_pika.acknowledge_message(data['delivery_tag'])
+
     def run(self):
         # run will loop to monitor workers
         print 'master %s' % os.getpid()
@@ -106,36 +123,39 @@ class Master(object):
         try:
             self.manage_workers()
             while True:
-                # simply sleep, no select on pip
-                # processing signal delay, that is acceptable for a simple model
                 try:
-                    ready = select.select([self.pipe[0]], [], [], 1.0)
+                    ready = select.select([self.pipe[0]] + [_[1][0] for _ in self.task_done_pipes.items()], [], [], 1.0)
                     if not ready[0]:
+                        # kill timeout worker
+                        self.checkout_timeout_worker()
+                        # monitor workers
+                        self.manage_workers()
                         continue
                     data = json.loads(os.read(ready[0][0], 1024))
                 except select.error as e:
                     if e.args[0] not in [errno.EAGAIN, errno.EINTR]:
                         raise
+                    continue
                 except OSError as e:
                     if e.errno not in [errno.EAGAIN, errno.EINTR]:
                         raise
+                    continue
                 except KeyboardInterrupt:
                     sys.exit()
                 if data['key'] == 'sig':
                     self.deal_with_sig()
                 elif data['key'] == 'amqp':
                     self.handle_threading_pika_data(data)
+                elif data['key'] == 'task_done':
+                    self.ack_task_done(data)
                 else:
                     print 'recv unexpected data, exit'
                     self.stop()
-                # kill timeout worker
-                self.checkout_timeout_worker()
-                # monitor workers
-                self.manage_workers()
-                continue
-        except SystemExit:
+        except Exception, e:
             # print 'in %s run exit' % os.getpid()
-            sys.exit(-1)
+            traceback.print_exc()
+            self.stop()
+            raise
 
     def handle_signal(self, sig_number, frame):
         self.signals.append(sig_number)
@@ -167,7 +187,7 @@ class Master(object):
         '''
         increase/decrease workers
         '''
-        if len(self.workers) < self.settings_config.workers:
+        if len(self.workers) < int(self.settings_config.workers):
             print 'spawn workers'
             self.spawn_workers()
         elif len(self.workers) > self.settings_config.workers:
@@ -179,10 +199,15 @@ class Master(object):
 
     def spawn_worker(self):
         self.age += 1
-        worker_object = Worker(self.age, os.getpid(), self.settings_config.task_module)
+        send_task_pipe = os.pipe()
+        task_done_pipe = os.pipe()
+        worker_object = Worker(self.age, os.getpid(), self.settings_config.task_module, send_task_pipe[0], task_done_pipe[1])
         pid = os.fork()
         if pid != 0:
+            self.idle_workers.append(pid)
             self.workers[pid] = worker_object
+            self.send_task_pipes[pid] = send_task_pipe
+            self.task_done_pipes[pid] = task_done_pipe
         else:
             try:
                 # worker raise SystemExit to exit
@@ -207,6 +232,13 @@ class Master(object):
         for _ in range(self.settings_config.workers - len(self.workers)):
             self.spawn_worker()
 
+    def close_child_pipes(self):
+        for i in [self.send_task_pipes.items(), self.task_done_pipes.items()]:
+            for j in i:
+                print 'closing worker %s pipe' % j[0]
+                os.close(j[1][0])
+                os.close(j[1][1])
+
     def stop(self, gracefully=True):
         print 'stoping workers'
         # first send sig to kill workers
@@ -220,6 +252,8 @@ class Master(object):
         self.threading_pika.stop()
         print 'close master pipe'
         [os.close(_) for _ in self.pipe]
+        print 'close child pipe'
+        self.close_child_pipes()
         print 'master exit'
         sys.exit(0)
 

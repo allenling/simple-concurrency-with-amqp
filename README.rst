@@ -7,6 +7,8 @@ simple-concurrency-with-amqp
 
 . prefork worker like gunicorn
 
+.. figure:: https://github.com/allenling/simple-concurrency-with-amqp/blob/master/master_start.png
+
 
 **2016.10.5 works**
 

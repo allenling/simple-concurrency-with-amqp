@@ -249,7 +249,8 @@ class Master(object):
     def clean_dead_worker(self, chd_pid):
         self.workers.pop(chd_pid)
         self.close_child_pipes(chd_pid)
-        self.idle_workers.pop(self.idle_workers.index(chd_pid))
+        if chd_pid in self.idle_workers:
+            self.idle_workers.pop(self.idle_workers.index(chd_pid))
 
     def stop(self, gracefully=True):
         print 'stoping workers'
@@ -282,9 +283,11 @@ class Master(object):
             if e.errno == errno.ESRCH:
                 # not such worker, maybe had been pop in waitpid(sigchld call back)
                 try:
-                    self.clean_dead_worker(chd_pid)
+                    self.clean_dead_worker(pid)
                 except (KeyError, OSError):
                         return
+                except Exception:
+                    raise
                 return
             raise
 

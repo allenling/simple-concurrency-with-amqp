@@ -17,7 +17,7 @@ Master will maincontains a list named idle_workers that includes every pid of wo
 
 1. when there is a amqp message come in, master will pop the first worker in idle_workers, and send data to worker pipe.
 
-2 .And worker send the message, which includes pid and delivery_tag, to master through another pipe.
+2. And worker send the message, which includes pid and delivery_tag, to master through another pipe.
 
 3. And when master recv a task done message, it will send a amqp ack message to rabbitmq, and more, append the worker pid to idle workers list.
 

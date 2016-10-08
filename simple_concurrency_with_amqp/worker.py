@@ -59,7 +59,7 @@ class Worker(object):
             task_name = getattr(self.task_module, task_data['method'], None)
             if task_name is None:
                 print 'no such task: %s' % task_data['method']
-                raise
+                raise StandardError('no such task')
             args = task_data['args']
             kwargs = task_data['kwargs']
             print 'worker %s recv task %s with args: %s, kwargs: %s' % (self.pid, task_name, args, kwargs)

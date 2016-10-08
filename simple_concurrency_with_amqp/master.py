@@ -110,9 +110,10 @@ class Master(object):
 
     def ack_task_done(self, data):
         print 'ack data: %s' % data
-        print 'idle workers: %s' % self.idle_workers
+        print 'before idle workers: %s' % self.idle_workers
         assert data['pid'] not in self.idle_workers
         self.idle_workers.append(data['pid'])
+        print 'after idle workers: %s' % self.idle_workers
         self.threading_pika.acknowledge_message(data['delivery_tag'])
 
     def run(self):
@@ -232,12 +233,23 @@ class Master(object):
         for _ in range(self.settings_config.workers - len(self.workers)):
             self.spawn_worker()
 
-    def close_child_pipes(self):
+    def close_childs_pipes(self):
         for i in [self.send_task_pipes.items(), self.task_done_pipes.items()]:
             for j in i:
                 print 'closing worker %s pipe' % j[0]
                 os.close(j[1][0])
                 os.close(j[1][1])
+
+    def close_child_pipes(self, chd_pid):
+        pipes = [self.send_task_pipes.pop(chd_pid), self.task_done_pipes.pop(chd_pid)]
+        for p in pipes:
+            for i in p:
+                os.close(i)
+
+    def clean_dead_worker(self, chd_pid):
+        self.workers.pop(chd_pid)
+        self.close_child_pipes(chd_pid)
+        self.idle_workers.pop(self.idle_workers.index(chd_pid))
 
     def stop(self, gracefully=True):
         print 'stoping workers'
@@ -246,14 +258,14 @@ class Master(object):
         _count = 0
         while self.workers and _count < 10:
             _count += 1
-            time.sleep(1)
+            time.sleep(0.1)
         self.kill_all_workers(gracefully=False)
         print 'stop threading_pika'
         self.threading_pika.stop()
         print 'close master pipe'
         [os.close(_) for _ in self.pipe]
         print 'close child pipe'
-        self.close_child_pipes()
+        self.close_childs_pipes()
         print 'master exit'
         sys.exit(0)
 
@@ -270,7 +282,7 @@ class Master(object):
             if e.errno == errno.ESRCH:
                 # not such worker, maybe had been pop in waitpid(sigchld call back)
                 try:
-                    self.workers.pop(pid)
+                    self.clean_dead_worker(chd_pid)
                 except (KeyError, OSError):
                         return
                 return
@@ -284,6 +296,8 @@ class Master(object):
             self.threading_pika.amqp.connect_to_new_amqp_url(self.settings_config.amqp)
             self.old_amqp = self.settings_config.amqp
             self.wait_for_connection()
+        # reset idle workers
+        self.idle_workers = []
         # spawn new workers
         for _ in range(self.settings_config.workers):
             self.spawn_worker()
@@ -312,7 +326,7 @@ class Master(object):
                 # TODO: maybe halt master cause infinite start/stop cycles.
                 # A worker said it cannot boot. We'll shutdown
                 # to avoid infinite start/stop cycles.
-                self.workers.pop(chd_pid)
+                self.clean_dead_worker(chd_pid)
         except OSError as e:
             if e.errno != errno.ECHILD:
                 raise

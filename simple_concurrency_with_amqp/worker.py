@@ -24,7 +24,7 @@ class Worker(object):
         signal.signal(signal.SIGQUIT, self.sigquit)
 
     def sigquit(self, signum, frame):
-        print 'worker quit'
+        print 'worker %s quit' % self.pid
         sys.exit(0)
 
     def sigterm(self, signum, frame):
@@ -65,6 +65,7 @@ class Worker(object):
             print 'worker %s recv task %s with args: %s, kwargs: %s' % (self.pid, task_name, args, kwargs)
             task_name(*args, **kwargs)
         except Exception:
+            print 'exception occur when worker %s run task' % self.pid
             traceback.print_exc()
         finally:
             self.notify_task_done(data['delivery_tag'])

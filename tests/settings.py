@@ -7,3 +7,5 @@ task_module_str = 'tests.task'
 amqp = 'amqp://testuser:testuser@localhost:5672/'
 
 workers = 2
+
+worker_timeout = 10

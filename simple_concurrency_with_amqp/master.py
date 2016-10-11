@@ -16,6 +16,36 @@ from simple_concurrency_with_amqp.worker import Worker
 from simple_concurrency_with_amqp.threading_pika import ThreadingPika
 
 
+class WorkerClock(object):
+    WAITING = 0
+    KILLING = 1
+    data = {}
+
+    def init_chd(self, pid, current_time=None):
+        self.data[pid] = {'status': self.WAITING, 'time': current_time if current_time else time.time()}
+
+    def make_killing(self, pid):
+        self.data[pid]['status'] = self.KILLING
+
+    def get_waiting_workers(self):
+        return [_ for _ in self.data if self.data[_]['status'] == self.WAITING]
+
+    def get_killing_workers(self):
+        return [_ for _ in self.data if self.data[_]['status'] == self.KILLING]
+
+    def get_worker_start_time(self, pid):
+        return self.data[pid]['time']
+
+    def release(self, pid):
+        if pid in self.data:
+            self.data.pop(pid)
+        else:
+            print 'warning: %s is not in WorkerClock.data, maybe somebody had released it' % pid
+
+    def release_all(self):
+        self.data = {}
+
+
 class Master(object):
 
     def __init__(self, settings_config):
@@ -31,6 +61,7 @@ class Master(object):
         self.pipe = None
         self.send_task_pipes = {}
         self.task_done_pipes = {}
+        self.worker_clock = WorkerClock()
         self.idle_workers = []
 
     def close_pipe(self):
@@ -45,7 +76,9 @@ class Master(object):
     def send_task(self, pika_data):
         assert self.idle_workers
         idle_worker = self.idle_workers.pop(0)
+        self.worker_clock.init_chd(idle_worker)
         print 'send task to %s' % idle_worker
+        print 'master worker_clock: %s' % self.worker_clock.data
         os.write(self.send_task_pipes[idle_worker][1], json.dumps(pika_data))
 
     def handle_threading_pika_data(self, pika_data):
@@ -113,6 +146,7 @@ class Master(object):
         print 'before idle workers: %s' % self.idle_workers
         assert data['pid'] not in self.idle_workers
         self.idle_workers.append(data['pid'])
+        self.worker_clock.release(data['pid'])
         print 'after idle workers: %s' % self.idle_workers
         self.threading_pika.acknowledge_message(data['delivery_tag'])
 
@@ -174,7 +208,13 @@ class Master(object):
         check if this is any worker doing something too long and kill it
         '''
         # TODO: check is there any timeout worker, temp file way like gunicorn
-        pass
+        now_time = time.time()
+        for chd in self.worker_clock.get_waiting_workers():
+            if now_time - self.worker_clock.get_worker_start_time(chd) > self.settings_config.worker_timeout:
+                self.worker_clock.make_killing(chd)
+                self.kill_worker(chd, gracefully=False)
+                # now, we just star one queue, so, channel number, alse called delivery_tag, is always be 1
+                self.ack_task_done({'pid': chd, 'delivery_tag': 1})
 
     def init_signals(self):
         '''
@@ -251,6 +291,7 @@ class Master(object):
         self.close_child_pipes(chd_pid)
         if chd_pid in self.idle_workers:
             self.idle_workers.pop(self.idle_workers.index(chd_pid))
+        self.worker_clock.release(chd_pid)
 
     def stop(self, gracefully=True):
         print 'stoping workers'
@@ -267,6 +308,7 @@ class Master(object):
         [os.close(_) for _ in self.pipe]
         print 'close child pipe'
         self.close_childs_pipes()
+        self.worker_clock.release_all()
         print 'master exit'
         sys.exit(0)
 
@@ -276,7 +318,8 @@ class Master(object):
             self.kill_worker(worker_pid, gracefully=gracefully)
 
     def kill_worker(self, pid, gracefully=True):
-        sig = signal.SIGTERM if gracefully else signal.SIGQUIT
+        sig = signal.SIGTERM if gracefully else signal.SIGKILL
+        print 'kill worker %s with %s' % (pid, sig)
         try:
             os.kill(pid, sig)
         except OSError as e:

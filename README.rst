@@ -1,15 +1,15 @@
 simple-concurrency-with-amqp
 ============================
 
-* master establish amqp(rabbitmq) connection with pika in a thread
+* Master establish amqp(rabbitmq) connection with pika in a thread
 
-* master send task to a idle worker through pipe, and worker will notify master when it make a task done through pipe 
+* Master send task to a idle worker through pipe, and worker will notify master when it make a task done through pipe 
 
-* prefork worker like gunicorn
+* Prefork worker like gunicorn
 
-* message format: {"method": "method_name", "args": ["arg1"], "kwargs": {"key": "value"}}
+* Message format: {"method": "method_name", "args": ["arg1"], "kwargs": {"key": "value"}}
 
-.. figure:: https://github.com/allenling/simple-concurrency-with-amqp/blob/master/master_start.png
+* The master_start.png is a simple diagram
 
 1. how it run
 -------------
@@ -42,10 +42,11 @@ A pesudo-round-robin way to send task to worker.
 
 
 **TODO:**
+1. **update qos**
 
-1. **checkout worker timeout**
+2. **checkout worker timeout**
 
-2. **maybe should setup multiple queues**
+3. **maybe should setup multiple queues**
    
    Multiple queues with multiple channels in one connection, just like what celery do.
 

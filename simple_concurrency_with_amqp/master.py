@@ -75,6 +75,7 @@ class Master(object):
 
     def send_task(self, pika_data):
         assert self.idle_workers
+        print 'idle_workers %s' % self.idle_workers
         idle_worker = self.idle_workers.pop(0)
         self.worker_clock.init_chd(idle_worker)
         print 'send task to %s' % idle_worker
@@ -143,11 +144,9 @@ class Master(object):
 
     def ack_task_done(self, data):
         print 'ack data: %s' % data
-        print 'before idle workers: %s' % self.idle_workers
         assert data['pid'] not in self.idle_workers
         self.idle_workers.append(data['pid'])
         self.worker_clock.release(data['pid'])
-        print 'after idle workers: %s' % self.idle_workers
         self.threading_pika.acknowledge_message(data['delivery_tag'])
 
     def run(self):
@@ -211,6 +210,7 @@ class Master(object):
         now_time = time.time()
         for chd in self.worker_clock.get_waiting_workers():
             if now_time - self.worker_clock.get_worker_start_time(chd) > self.settings_config.worker_timeout:
+                print 'worker %s timeout' % chd
                 self.worker_clock.make_killing(chd)
                 self.kill_worker(chd, gracefully=False)
                 # now, we just star one queue, so, channel number, alse called delivery_tag, is always be 1

@@ -30,7 +30,9 @@ simple-concurrency-with-amqp
 -----
 master分配task给worker的时候，记录下worker的当前时间，每隔一段时间去检查worker是否超时.
 
-**TODO:**
+TODO:
+------
+
 1. 根据worker输了更新rabbitmq的qos
 
 2. 支持建立多个queue

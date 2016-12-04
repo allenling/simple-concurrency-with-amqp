@@ -1,54 +1,36 @@
 simple-concurrency-with-amqp
 ============================
 
-* Master establish amqp(rabbitmq) connection with pika in a thread
+* 启动一个线程去建立amqp连接, 一旦建立了连接，创建好queue，创建好channel并且接收到rabbimq发送的consume ok，通过pipe通知主线程可以开始
+  工作. 并且之后若接收到rabbitmq发送过来的消息，则还是通过pipe发送给猪线程.
+* 主进程一旦接收到amqp连接线程的通知, prefork的方式孵化worker，与worker通信也是使用pipe.
+* 主进程使用epoll监听amqp线程的消息，worker发送过来的消息.
+* 消息格式: {"method": "method_name", "args": ["arg1"], "kwargs": {"key": "value"}
+* master_start.png是一个简单图示.
 
-* Master send task to a idle worker through pipe, and worker will notify master when it make a task done through pipe 
-
-* Prefork worker like gunicorn
-
-* Message format: {"method": "method_name", "args": ["arg1"], "kwargs": {"key": "value"}}
-
-* The master_start.png is a simple diagram
-
-1. how it run
+主线程如何工作
 -------------
+参考gunicorn，master孵化worker并且创建和worker交互的pipe，epoll监听amqp线程，worker交互的pipe.
 
-Here is the way, that master will take a responsibility to do everything except run task.
+1. 主线程开始配置, 启动amqp线程去连接rabbitmq，然后通过epoll来监听amqp线程的通知. 若amqp线程通知表示已经准备就绪(创建了queue，channel，绑定了
+   queue和channel，开始消费消息), .
 
-Master will load the settings, and wait for a amqp connection be established in a new start thread with pika.
+2. prefork方式去孵化worker，创建好相互交互的pipe，将pipe加入到epoll监听列表中. 然后等待epoll通知.
 
-When a amqp connection be established, master will spawn workers, call select.select to wait for any message sent to master.
+3. 若有amqp到来，发送消息给worker.
 
-When master will manage worker by spawning a new worker or killing a unexpected worker to make the number of running workers equals the worker number we set in settings.
+4. 若有worker发送消息过来，说明需要ack，将消息ack掉.
 
-When master find out a worker timeout, master should send ack message to rabbitmq.
+5. 若没有消息，则不断地去查看worker数量和配置的是否一致，不一致，若worker数少，则孵化新的worker，加入到self.workers中。若多，则根据worker的age来
+   杀掉老的worker.
 
-All worker has to do is, that call select.select to wait for any task sent to worker, and run task.
+6. worker监听pipe，收到消息，执行函数，执行完之后发送task_done给master
 
-
-2. how master send task
------------------------
-
-Master will maincontains a list named idle_workers that includes every pid of workers.
-
-1. when there is a amqp message come in, master will pop the first worker in idle_workers, and send data to worker pipe.
-
-2. And worker send the message, which includes pid and delivery_tag, to master through another pipe.
-
-3. And when master recv a task done message, it will send a amqp acknowledgement message to rabbitmq, and more, append the worker pid to idle workers list.
-
-A pesudo-round-robin way to send task to worker.
-
+超时
+-----
+master分配task给worker的时候，记录下worker的当前时间，每隔一段时间去检查worker是否超时.
 
 **TODO:**
-1. **update qos**
+1. 根据worker输了更新rabbitmq的qos
 
-2. **checkout worker timeout**
-
-3. **maybe should setup multiple queues**
-   
-   Multiple queues with multiple channels in one connection, just like what celery do.
-
-   So we do not have to send ack message in master.
-
+2. 支持建立多个queue
